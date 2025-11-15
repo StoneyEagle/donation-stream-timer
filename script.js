@@ -2,8 +2,10 @@
 // ---- Configuration ----
 const setup = {
     webSocketUrl: "ws://localhost:8080/",    // WebSocket URL to connect to Streamer.bot or your backend
-    initialHours: 48,                        // Initial countdown timer duration in hours
 
+    // Permissions
+    allowMods: true,
+                             // If true, moderators may use timer chat commands; if false, only the broadcaster may
     // ---- Kofi Settings ----
     kofiDonationTimeIncrement: 2,            // Minutes added per $1 donated via Kofi
     kofiSubscriptionTimeIncrement: 30,       // Flat minutes added per Kofi subscription or resubscription
@@ -34,8 +36,10 @@ const setup = {
 const textEl = document.getElementById("text");
 const ws = new WebSocket(setup.webSocketUrl);
 
-let durationSeconds = setup.initialHours * 3600; // convert hours to seconds
-let endTime = Date.now() + durationSeconds * 1000;
+let remainingSeconds = 0;
+let endTime = Date.now() + remainingSeconds * 1000;
+// Default behavior: start paused at 0 (no automatic default time). Use chat `!time set <duration>` to set and start the timer.
+let paused = true;
 
 // ---- Format as HH:MM:SS ----
 function formatTime(totalSeconds) {
@@ -51,21 +55,11 @@ function formatTime(totalSeconds) {
     return `${hStr}:${mStr}:${sStr}`;
 }
 
-// ---- Update display based on Date.now() ----
-function updateDisplay() {
-    const remainingSeconds = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
-    textEl.textContent = formatTime(remainingSeconds);
-    return remainingSeconds;
+// ---- Remaining time helper and display ----
+function getRemainingSeconds() {
+    if (paused) return remainingSeconds;
+    return Math.max(0, Math.floor((endTime - Date.now()) / 1000));
 }
-
-// ---- Animation loop ----
-function tick() {
-    const remaining = updateDisplay();
-    if (remaining > 0) {
-        requestAnimationFrame(tick);
-    }
-}
-tick();
 
 // ---- Time calculation function per event type ----
 function calculateExtraMinutes(source, eventType, amountOrBits, tier) {
@@ -104,6 +98,155 @@ function calculateExtraMinutes(source, eventType, amountOrBits, tier) {
     return 0;
 }
 
+// ---- Parse human-friendly time formats ----
+function parseHumanTime(str) {
+    if (!str) return 0;
+    str = str.trim().toLowerCase();
+
+    // Format like 1:20, 10:30:15
+    if (/^\d+(:\d+){1,2}$/.test(str)) {
+        const parts = str.split(":").map(Number);
+        if (parts.length === 2) {
+            const [m, s] = parts;
+            return (m * 60) + s;
+        }
+        if (parts.length === 3) {
+            const [h, m, s] = parts;
+            return (h * 3600) + (m * 60) + s;
+        }
+    }
+
+    // Format like "1h 20m", "10m", "90s"
+    let total = 0;
+    const regex = /(\d+)\s*(h|hr|hrs|hour|hours|m|min|mins|minute|minutes|s|sec|secs|second|seconds)/g;
+    let match;
+
+    while ((match = regex.exec(str)) !== null) {
+        const value = parseInt(match[1]);
+        const unit = match[2];
+
+        if (unit.startsWith("h")) total += value * 3600;
+        else if (unit.startsWith("m")) total += value * 60;
+        else if (unit.startsWith("s")) total += value;
+    }
+
+    return total;
+}
+
+// ---- Twitch Chat Message Command Handler ----
+function handleTwitchChatMessage(msg) {
+    const data = msg.data;
+
+    // Extract text safely
+    const text = (data.text || data.message?.message || "").toLowerCase().trim();
+
+    // Allow both "!time" and "time"
+    if (!text.startsWith("!time") && !text.startsWith("time")) return;
+
+    // Permissions: broadcaster OR (moderator if enabled in setup)
+    const badges = data.message?.badges || [];
+    const isBroadcaster = badges.some(b => b.name === "broadcaster");
+    const isModerator = badges.some(b => b.name === "moderator");
+
+    if (!isBroadcaster && !(setup.allowMods && isModerator)) return;
+
+    // Remove prefix
+    const cleaned = text.replace("!time", "").replace("time", "").trim();
+    const parts = cleaned.split(" ");
+    const action = parts[0];
+    const timeString = parts.slice(1).join(" ");
+
+    switch (action) {
+        case "pause":
+            if (!paused) {
+                remainingSeconds = Math.max(0, Math.floor((endTime - Date.now()) / 1000));
+                paused = true;
+            }
+            break;
+
+        case "resume":
+            if (paused) {
+                endTime = Date.now() + remainingSeconds * 1000;
+                paused = false;
+            }
+            break;
+            case "start": {
+                // start accepts an optional duration: '!time start <duration>' will set-and-start.
+                // If no duration is provided, start behaves like resume but only if remainingSeconds > 0.
+                const startSeconds = parseHumanTime(timeString);
+                if (startSeconds > 0) {
+                    // set the timer to the provided duration and start
+                    remainingSeconds = startSeconds;
+                    endTime = Date.now() + remainingSeconds * 1000;
+                    paused = false;
+                } else {
+                    // no duration provided or parsed as 0 — behave like resume if there is remaining time
+                    if (paused) {
+                        if (remainingSeconds > 0) {
+                            endTime = Date.now() + remainingSeconds * 1000;
+                            paused = false;
+                        } else {
+                            console.log("!time start ignored: remaining time is 0. Use '!time set <duration>' or '!time start <duration>' first.");
+                        }
+                    }
+                }
+                break;
+            }
+        case "add": {
+            const addSeconds = parseHumanTime(timeString);
+            if (addSeconds > 0) {
+                if (paused) {
+                    remainingSeconds += addSeconds;
+                } else {
+                    endTime += addSeconds * 1000;
+                }
+            }
+            break;
+        }
+
+        case "sub":
+        case "subtract": {
+            const subSeconds = parseHumanTime(timeString);
+            if (subSeconds > 0) {
+                if (paused) {
+                    remainingSeconds = Math.max(0, remainingSeconds - subSeconds);
+                } else {
+                    endTime -= subSeconds * 1000;
+                }
+            }
+            break;
+        }
+
+        case "set": {
+            const setStr = timeString;
+            const setSeconds = parseHumanTime(setStr);
+            if (setSeconds >= 0) {
+                endTime = Date.now() + setSeconds * 1000;
+                remainingSeconds = setSeconds;
+                paused = false;
+            }
+            break;
+        }
+    }
+}
+
+// ---- Update display function ----
+function updateDisplay() {
+    const remaining = getRemainingSeconds();
+    textEl.textContent = formatTime(remaining);
+    return remaining;
+}
+
+// ---- Animation loop ----
+function tick() {
+    updateDisplay();
+    // keep the animation frame running so the display updates when unpaused or on events
+    requestAnimationFrame(tick);
+}
+
+// Start the animation loop
+tick();
+
 // ---- WebSocket subscription ----
 ws.onopen = () => {
     const subscribeMsg = {
@@ -111,30 +254,52 @@ ws.onopen = () => {
         id: "obsWidgetUpdate",
         events: {
             Kofi: ["Donation", "Commission", "Resubscription", "Subscription", "ShopOrder"],
-            Twitch: ["Sub","ReSub","GiftSub","SharedChatSub","SharedChatResub","SharedChatSubGift","Cheer"]
+            Twitch: [
+                "Sub","ReSub","GiftSub","SharedChatSub",
+                "SharedChatResub","SharedChatSubGift",
+                "Cheer","ChatMessage"
+            ]
         }
     };
+
     ws.send(JSON.stringify(subscribeMsg));
-    console.log("Subscribed to Kofi events");
+    console.log("Subscribed to StreamerBot events");
 };
 
 
 // ---- Handle incoming events ----
 ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
+    console.log("Received:", msg);
+
     const source = msg.event?.source;
     const eventType = msg.event?.type;
-    let amountOrBits = 0;
-    let tier = null;
+    let amount = 0;
 
-    if (source === "Kofi") amountOrBits = msg.data?.amount || 0;
-    if (source === "Twitch") {
-        if (eventType === "Cheer") amountOrBits = msg.data?.bits || 0;
-        if (["Sub","ReSub"].includes(eventType)) tier = msg.data?.subPlan || msg.data?.tier; // Twitch tier: 1000, 2000, 3000
+    // ---- Handle Twitch.ChatMessage ----
+    if (source === "Twitch" && eventType === "ChatMessage") {
+        handleTwitchChatMessage(msg);
+        return; // don't process timer logic for chat messages
     }
 
-    const extraMinutes = calculateExtraMinutes(source, eventType, amountOrBits, tier);
-    if (extraMinutes > 0) endTime += extraMinutes * 60 * 1000;
+    // ---- Normal event handling ----
+    if (source === "Kofi") amount = msg.data?.amount || 0;
+    if (source === "Twitch") {
+        if (eventType === "Cheer") amount = msg.data?.bits || 0;
+        if (eventType === "Sub" || eventType === "ReSub") {
+            amount = msg.data?.subTier || "1000"; // default T1
+        }
+    }
+
+    const extraMinutes = calculateExtraMinutes(source, eventType, amount);
+
+    if (extraMinutes > 0) {
+        if (paused) {
+            remainingSeconds += extraMinutes * 60;
+        } else {
+            endTime += extraMinutes * 60 * 1000;
+        }
+    }
 };
 
 ws.onerror = (err) => console.error("WebSocket error:", err);
