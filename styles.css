@@ -1,23 +1,31 @@
 
 @import url(https://fonts.bunny.net/css?family=inter:900);
-body {
-    width: 445px !important;
-    height: 106px !important;
+html, body {
     margin: 0;
     padding: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    background: transparent;
+    overflow: hidden;
 }
-img {
-    position: absolute;
-    left: 0;
-    top: 0;
+
+#timer {
+    width: min(445px, 100vw, calc(100vh * 4.198113));
+    aspect-ratio: 445 / 106;
+    display: grid;
+    place-items: center;
+}
+
+#timer > img, #text {
+    grid-area: 1 / 1;
+}
+
+#timer > img {
+    width: 100%;
+    height: auto;
     display: block;
 }
 #text {
     font-family: 'Inter', sans-serif;
-    font-size: 50px; 
+    font-size: min(50px, 11.235955vw, 47.169811vh);
     font-weight: 900; 
     text-align: center; 
     color: #fff;

@@ -144,7 +144,7 @@ function handleTwitchChatMessage(msg) {
     if (!text.startsWith("!time") && !text.startsWith("time")) return;
 
     // Permissions: broadcaster OR (moderator if enabled in setup)
-    const badges = data.message?.badges || [];
+    const badges = data.user?.badges || data.message?.badges || [];
     const isBroadcaster = badges.some(b => b.name === "broadcaster");
     const isModerator = badges.some(b => b.name === "moderator");
 

@@ -135,7 +135,7 @@ Commands are accepted only from the Broadcaster and Moderators. Other users are 
 
 1. Add a Browser Source in OBS.
 2. Point it to `index.html` (local file or hosted URL).
-3. Set the source size and any CSS scaling as needed.
+3. Set the Browser Source width to **445** and height to **106** for the native overlay size. The border and text scale together for smaller source sizes. Resize the complete source in OBS to change its size on your scene.
 4. (Optional) Enable "Refresh browser when scene becomes active" to ensure the overlay resets when switching scenes.
 
 ## Customization
